@@ -1,4 +1,4 @@
-from __future__ import annotations
+"""Legacy compatibility shim for `fault_injector.config` imports.
 
 from dataclasses import dataclass
 import json
@@ -17,6 +17,7 @@ class ConfigValidationError(ValueError):
         text = "; ".join(f"{issue.path}: {issue.message}" for issue in issues)
         super().__init__(f"Invalid config: {text}")
 
+from fault_injector.config import InjectorConfig, ServerConfig, load_config
 
 @dataclass(slots=True)
 class ServerConfig:
