@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import shlex
 import uuid
 
-from channel.ssh import HostSpec, SSHChannel
 from fault_injector.config import InjectorConfig
-from fault_injector.rollback import RollbackEntry, RollbackJournal
+from fault_injector.orchestrator.engine import FaultOrchestratorEngine
 
 
 @dataclass(slots=True)
@@ -18,7 +16,7 @@ class ActionReport:
 
 
 class FaultInjector:
-    """RoCE MTU mismatch fault injector with WAL-first rollback flow."""
+    """Backward-compatible facade that forwards to the new orchestrator engine."""
 
     def __init__(self, config: InjectorConfig, session_id: str | None = None) -> None:
         self.config = config
@@ -56,22 +54,13 @@ class FaultInjector:
         return reports
 
     def rollback(self) -> list[ActionReport]:
-        reports: list[ActionReport] = []
-        entries = self.journal.load(self.session_id)
-        for entry in reversed(entries):
-            srv = next(s for s in self.config.servers if s.name == entry.host)
-            result = self.channel.execute(
-                HostSpec(name=srv.name, host=srv.host, user=srv.user, port=srv.port),
-                entry.rollback_command,
-                timeout=self.config.timeout,
-            )
-            reports.append(
-                ActionReport(
-                    host=entry.host,
-                    inject_command="",
-                    rollback_command=entry.rollback_command,
-                    success=result.success,
-                )
+        reports = self.engine.rollback()
+        return [
+            ActionReport(
+                host=report.host,
+                inject_command=report.inject_command,
+                rollback_command=report.rollback_command,
+                success=report.success,
             )
         self.journal.remove_session(self.session_id)
         return reports
