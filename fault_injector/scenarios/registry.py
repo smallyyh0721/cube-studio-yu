@@ -1,31 +1,26 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Protocol
+
+from fault_injector.config import InjectorConfig
+from fault_injector.orchestrator.session import FaultStep
 
 
-@dataclass(frozen=True, slots=True)
-class ScenarioDefinition:
-    scenario_id: str
-    code: str
-    description: str
-    rollback_supported: bool
-    injector_method: str
+class Scenario(Protocol):
+    name: str
+
+    def build_steps(self, config: InjectorConfig) -> list[FaultStep]:
+        ...
 
 
-SCENARIO_REGISTRY: dict[str, ScenarioDefinition] = {
-    "roce-mtu-mismatch": ScenarioDefinition(
-        scenario_id="roce-mtu-mismatch",
-        code="RC/F-001",
-        description="Inject RoCE MTU mismatch across configured nodes.",
-        rollback_supported=True,
-        injector_method="inject_roce_mtu_mismatch",
-    )
-}
+class ScenarioRegistry:
+    def __init__(self) -> None:
+        self._scenarios: dict[str, Scenario] = {}
 
+    def register(self, scenario: Scenario) -> None:
+        self._scenarios[scenario.name] = scenario
 
-def list_scenarios() -> list[ScenarioDefinition]:
-    return sorted(SCENARIO_REGISTRY.values(), key=lambda item: item.code)
-
-
-def get_scenario(scenario_id: str) -> ScenarioDefinition | None:
-    return SCENARIO_REGISTRY.get(scenario_id)
+    def get(self, name: str) -> Scenario:
+        if name not in self._scenarios:
+            raise KeyError(f"Unknown scenario: {name}")
+        return self._scenarios[name]

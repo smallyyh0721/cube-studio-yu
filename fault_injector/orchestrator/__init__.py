@@ -1,3 +1,4 @@
-from fault_injector.orchestrator.engine import FaultOrchestrator
+from fault_injector.orchestrator.engine import FaultOrchestratorEngine
+from fault_injector.orchestrator.session import ActionResult, FaultStep, OrchestratorSession
 
-__all__ = ["FaultOrchestrator"]
+__all__ = ["FaultOrchestratorEngine", "ActionResult", "FaultStep", "OrchestratorSession"]

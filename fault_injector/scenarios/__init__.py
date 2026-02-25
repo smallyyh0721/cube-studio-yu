@@ -1,3 +1,5 @@
-from fault_injector.scenarios.registry import ScenarioDefinition, get_scenario, list_scenarios
+from fault_injector.scenarios.registry import ScenarioRegistry
+from fault_injector.scenarios.rdma_anomaly import RDMAMtuAnomalyScenario
+from fault_injector.scenarios.vllm_latency import VLLMLatencyScenario
 
-__all__ = ["ScenarioDefinition", "get_scenario", "list_scenarios"]
+__all__ = ["ScenarioRegistry", "RDMAMtuAnomalyScenario", "VLLMLatencyScenario"]
