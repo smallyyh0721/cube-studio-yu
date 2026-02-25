@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import time
 import shlex
 import uuid
 
 from fault_injector.config import InjectorConfig
-from fault_injector.orchestrator.engine import FaultOrchestratorEngine
+from fault_injector.safety.guard import SafetyGuard
+from fault_injector.safety.rollback import RollbackEntry, RollbackJournal
+from orchestrator.watchdog import SessionWatchdog
 
 
 @dataclass(slots=True)
@@ -28,7 +29,15 @@ class FaultInjector:
         self.config = config
         self.session_id = session_id or uuid.uuid4().hex
         self.journal = RollbackJournal(config.wal_path)
-        self.channel = SSHChannel(mode=config.mode, wal_hook=self._wal_prewrite)
+        authorized_targets = {srv.name for srv in config.servers}
+        self.guard = SafetyGuard(authorized_targets=authorized_targets)
+        self.watchdog = SessionWatchdog(
+            timeout_seconds=config.timeout,
+            config=config,
+            journal=self.journal,
+            channel=self.channel,
+            guard=self.guard,
+        )
 
         for srv in config.servers:
             self.channel.seed_simulated_mtu(srv.name, srv.interface, srv.original_mtu)
@@ -39,11 +48,14 @@ class FaultInjector:
             inject_command = self._build_set_mtu_command(srv.interface, srv.fault_mtu)
             rollback_command = self._build_set_mtu_command(srv.interface, srv.original_mtu)
 
-            self.journal.record(
-                RollbackEntry(
+            self.guard.validate(target=srv.name, command=inject_command)
+            self.guard.validate(target=srv.name, command=rollback_command)
+
+            self.journal.append(
+                RollbackEntry.pending(
                     session_id=self.session_id,
-                    host=srv.name,
-                    rollback_command=rollback_command,
+                    target=srv.name,
+                    recovery_action=rollback_command,
                 )
             )
 
@@ -73,30 +85,25 @@ class FaultInjector:
         return reports
 
     def rollback(self) -> list[ActionReport]:
-        reports: list[ActionReport] = []
-        entries = self.journal.load(self.session_id)
-        for entry in reversed(entries):
-            srv = next(s for s in self.config.servers if s.name == entry.host)
-            start = time.perf_counter()
-            result = self.channel.execute(
-                HostSpec(name=srv.name, host=srv.host, user=srv.user, port=srv.port),
-                entry.rollback_command,
-                timeout=self.config.timeout,
-            )
-            elapsed_ms = int((time.perf_counter() - start) * 1000)
-            reports.append(
-                ActionReport(
-                    host=entry.host,
-                    inject_command="",
-                    rollback_command=entry.rollback_command,
-                    success=result.success,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    duration_ms=elapsed_ms,
-                    error=result.stderr,
-                )
-            )
-        self.journal.remove_session(self.session_id)
-        return reports
+        rollback_reports = self.watchdog.resume(session_id=self.session_id)
+        return [
+            ActionReport(host=r.host, inject_command="", rollback_command=r.rollback_command, success=r.success)
+            for r in rollback_reports
+        ]
+
+    def rollback_on_timeout(self, started_at: datetime, now: datetime | None = None) -> list[ActionReport]:
+        rollback_reports = self.watchdog.trigger_timeout_rollback(
+            session_id=self.session_id,
+            started_at=started_at,
+            now=now or datetime.now(timezone.utc),
+        )
+        return [
+            ActionReport(host=r.host, inject_command="", rollback_command=r.rollback_command, success=r.success)
+            for r in rollback_reports
+        ]
+
+    def resume_rollback(self) -> list[ActionReport]:
+        return self.rollback()
 
     @staticmethod
     def _build_set_mtu_command(interface: str, mtu: int) -> str:

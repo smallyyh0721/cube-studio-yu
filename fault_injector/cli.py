@@ -13,11 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Cube Studio fault injector")
     parser.add_argument("--config", required=True, help="Path to injector conf json config")
     parser.add_argument("--session-id", default="demo-session", help="Session id for WAL")
-    parser.add_argument(
-        "--report-dir",
-        default="fault_injector/reports",
-        help="Directory to write report.json and report.html",
-    )
+    parser.add_argument("--resume", action="store_true", help="Resume rollback from unfinished WAL items")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -42,7 +38,9 @@ def main() -> None:
     run_result = orchestrator.run(command=args.command, output_dir=args.report_dir)
 
     if args.command == "inject-roce-mtu-mismatch":
-        action_report = run_result["inject_reports"]
+        report = injector.inject_roce_mtu_mismatch()
+    elif args.resume:
+        report = injector.resume_rollback()
     else:
         action_report = run_result["rollback_reports"]
 
