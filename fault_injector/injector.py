@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import time
 import shlex
 import uuid
 
@@ -15,6 +17,9 @@ class ActionReport:
     inject_command: str
     rollback_command: str
     success: bool
+    timestamp: str = ""
+    duration_ms: int = 0
+    error: str = ""
 
 
 class FaultInjector:
@@ -43,17 +48,22 @@ class FaultInjector:
                 )
             )
 
+            start = time.perf_counter()
             result = self.channel.execute(
                 HostSpec(name=srv.name, host=srv.host, user=srv.user, port=srv.port),
                 inject_command,
                 timeout=self.config.timeout,
             )
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
             reports.append(
                 ActionReport(
                     host=srv.name,
                     inject_command=inject_command,
                     rollback_command=rollback_command,
                     success=result.success,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    duration_ms=elapsed_ms,
+                    error=result.stderr,
                 )
             )
         return reports
@@ -63,17 +73,22 @@ class FaultInjector:
         entries = self.journal.load(self.session_id)
         for entry in reversed(entries):
             srv = next(s for s in self.config.servers if s.name == entry.host)
+            start = time.perf_counter()
             result = self.channel.execute(
                 HostSpec(name=srv.name, host=srv.host, user=srv.user, port=srv.port),
                 entry.rollback_command,
                 timeout=self.config.timeout,
             )
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
             reports.append(
                 ActionReport(
                     host=entry.host,
                     inject_command="",
                     rollback_command=entry.rollback_command,
                     success=result.success,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    duration_ms=elapsed_ms,
+                    error=result.stderr,
                 )
             )
         self.journal.remove_session(self.session_id)
