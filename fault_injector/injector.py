@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import shlex
 import uuid
 
-from channel.ssh import HostSpec, SSHChannel
 from fault_injector.config import InjectorConfig
 from fault_injector.safety.guard import SafetyGuard
 from fault_injector.safety.rollback import RollbackEntry, RollbackJournal
@@ -18,15 +17,17 @@ class ActionReport:
     inject_command: str
     rollback_command: str
     success: bool
+    timestamp: str = ""
+    duration_ms: int = 0
+    error: str = ""
 
 
 class FaultInjector:
-    """RoCE MTU mismatch fault injector with WAL-first rollback flow."""
+    """Backward-compatible facade that forwards to the new orchestrator engine."""
 
     def __init__(self, config: InjectorConfig, session_id: str | None = None) -> None:
         self.config = config
         self.session_id = session_id or uuid.uuid4().hex
-        self.channel = SSHChannel(mode=config.mode)
         self.journal = RollbackJournal(config.wal_path)
         authorized_targets = {srv.name for srv in config.servers}
         self.guard = SafetyGuard(authorized_targets=authorized_targets)
@@ -58,17 +59,27 @@ class FaultInjector:
                 )
             )
 
+            start = time.perf_counter()
             result = self.channel.execute(
                 HostSpec(name=srv.name, host=srv.host, user=srv.user, port=srv.port),
                 inject_command,
                 timeout=self.config.timeout,
+                wal_payload={
+                    "session_id": self.session_id,
+                    "host": srv.name,
+                    "rollback_command": rollback_command,
+                },
             )
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
             reports.append(
                 ActionReport(
                     host=srv.name,
                     inject_command=inject_command,
                     rollback_command=rollback_command,
                     success=result.success,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    duration_ms=elapsed_ms,
+                    error=result.stderr,
                 )
             )
         return reports
@@ -98,3 +109,12 @@ class FaultInjector:
     def _build_set_mtu_command(interface: str, mtu: int) -> str:
         iface = shlex.quote(interface)
         return f"sudo ip link set dev {iface} mtu {int(mtu)}"
+
+    def _wal_prewrite(self, payload: dict[str, str]) -> None:
+        self.journal.record(
+            RollbackEntry(
+                session_id=payload["session_id"],
+                host=payload["host"],
+                rollback_command=payload["rollback_command"],
+            )
+        )
