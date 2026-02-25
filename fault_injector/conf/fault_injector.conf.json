@@ -13,6 +13,6 @@
       "interface": "ens5f0",
       "original_mtu": 4200,
       "fault_mtu": 1500
-    },
+    }
   ]
 }
