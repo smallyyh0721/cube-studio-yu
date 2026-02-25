@@ -23,8 +23,8 @@ class FaultInjector:
     def __init__(self, config: InjectorConfig, session_id: str | None = None) -> None:
         self.config = config
         self.session_id = session_id or uuid.uuid4().hex
-        self.channel = SSHChannel(mode=config.mode)
         self.journal = RollbackJournal(config.wal_path)
+        self.channel = SSHChannel(mode=config.mode, wal_hook=self._wal_prewrite)
 
         for srv in config.servers:
             self.channel.seed_simulated_mtu(srv.name, srv.interface, srv.original_mtu)
@@ -35,18 +35,15 @@ class FaultInjector:
             inject_command = self._build_set_mtu_command(srv.interface, srv.fault_mtu)
             rollback_command = self._build_set_mtu_command(srv.interface, srv.original_mtu)
 
-            self.journal.record(
-                RollbackEntry(
-                    session_id=self.session_id,
-                    host=srv.name,
-                    rollback_command=rollback_command,
-                )
-            )
-
             result = self.channel.execute(
                 HostSpec(name=srv.name, host=srv.host, user=srv.user, port=srv.port),
                 inject_command,
                 timeout=self.config.timeout,
+                wal_payload={
+                    "session_id": self.session_id,
+                    "host": srv.name,
+                    "rollback_command": rollback_command,
+                },
             )
             reports.append(
                 ActionReport(
@@ -83,3 +80,12 @@ class FaultInjector:
     def _build_set_mtu_command(interface: str, mtu: int) -> str:
         iface = shlex.quote(interface)
         return f"sudo ip link set dev {iface} mtu {int(mtu)}"
+
+    def _wal_prewrite(self, payload: dict[str, str]) -> None:
+        self.journal.record(
+            RollbackEntry(
+                session_id=payload["session_id"],
+                host=payload["host"],
+                rollback_command=payload["rollback_command"],
+            )
+        )
