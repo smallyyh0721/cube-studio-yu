@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import shlex
 import uuid
 
+from channel.ssh import SSHChannel
 from fault_injector.config import InjectorConfig
+from fault_injector.scenarios.rdma_anomaly import RDMAMtuAnomalyScenario
 from fault_injector.safety.guard import SafetyGuard
-from fault_injector.safety.rollback import RollbackEntry, RollbackJournal
+from fault_injector.safety.rollback import RollbackJournal
 from orchestrator.watchdog import SessionWatchdog
 
 
@@ -28,9 +29,11 @@ class FaultInjector:
     def __init__(self, config: InjectorConfig, session_id: str | None = None) -> None:
         self.config = config
         self.session_id = session_id or uuid.uuid4().hex
+        self.channel = SSHChannel(mode=config.mode, wal_hook=self._wal_prewrite)
         self.journal = RollbackJournal(config.wal_path)
         authorized_targets = {srv.name for srv in config.servers}
         self.guard = SafetyGuard(authorized_targets=authorized_targets)
+        self.scenario = RDMAMtuAnomalyScenario()
         self.watchdog = SessionWatchdog(
             timeout_seconds=config.timeout,
             config=config,
@@ -43,46 +46,7 @@ class FaultInjector:
             self.channel.seed_simulated_mtu(srv.name, srv.interface, srv.original_mtu)
 
     def inject_roce_mtu_mismatch(self) -> list[ActionReport]:
-        reports: list[ActionReport] = []
-        for srv in self.config.servers:
-            inject_command = self._build_set_mtu_command(srv.interface, srv.fault_mtu)
-            rollback_command = self._build_set_mtu_command(srv.interface, srv.original_mtu)
-
-            self.guard.validate(target=srv.name, command=inject_command)
-            self.guard.validate(target=srv.name, command=rollback_command)
-
-            self.journal.append(
-                RollbackEntry.pending(
-                    session_id=self.session_id,
-                    target=srv.name,
-                    recovery_action=rollback_command,
-                )
-            )
-
-            start = time.perf_counter()
-            result = self.channel.execute(
-                HostSpec(name=srv.name, host=srv.host, user=srv.user, port=srv.port),
-                inject_command,
-                timeout=self.config.timeout,
-                wal_payload={
-                    "session_id": self.session_id,
-                    "host": srv.name,
-                    "rollback_command": rollback_command,
-                },
-            )
-            elapsed_ms = int((time.perf_counter() - start) * 1000)
-            reports.append(
-                ActionReport(
-                    host=srv.name,
-                    inject_command=inject_command,
-                    rollback_command=rollback_command,
-                    success=result.success,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    duration_ms=elapsed_ms,
-                    error=result.stderr,
-                )
-            )
-        return reports
+        return self.scenario.inject_roce_mtu_mismatch(self)
 
     def rollback(self) -> list[ActionReport]:
         rollback_reports = self.watchdog.resume(session_id=self.session_id)
@@ -105,16 +69,6 @@ class FaultInjector:
     def resume_rollback(self) -> list[ActionReport]:
         return self.rollback()
 
-    @staticmethod
-    def _build_set_mtu_command(interface: str, mtu: int) -> str:
-        iface = shlex.quote(interface)
-        return f"sudo ip link set dev {iface} mtu {int(mtu)}"
-
     def _wal_prewrite(self, payload: dict[str, str]) -> None:
-        self.journal.record(
-            RollbackEntry(
-                session_id=payload["session_id"],
-                host=payload["host"],
-                rollback_command=payload["rollback_command"],
-            )
-        )
+        # Entries are appended in scenario execution before command dispatch.
+        _ = payload

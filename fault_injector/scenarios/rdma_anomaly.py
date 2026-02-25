@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import shlex
+import time
+from typing import TYPE_CHECKING
 
 from channel.ssh import HostSpec
 from fault_injector.config import InjectorConfig
 from fault_injector.orchestrator.session import FaultStep
+from fault_injector.safety.rollback import RollbackEntry
+
+if TYPE_CHECKING:
+    from fault_injector.injector import ActionReport, FaultInjector
 
 
 class RDMAMtuAnomalyScenario:
@@ -33,3 +40,44 @@ class RDMAMtuAnomalyScenario:
                 )
             )
         return steps
+
+    def inject_roce_mtu_mismatch(self, injector: FaultInjector) -> list[ActionReport]:
+        from fault_injector.injector import ActionReport
+
+        reports: list[ActionReport] = []
+        for step in self.build_steps(injector.config):
+            injector.guard.validate(target=step.host.name, command=step.inject_command)
+            injector.guard.validate(target=step.host.name, command=step.rollback_command)
+
+            injector.journal.append(
+                RollbackEntry.pending(
+                    session_id=injector.session_id,
+                    target=step.host.name,
+                    recovery_action=step.rollback_command,
+                )
+            )
+
+            start = time.perf_counter()
+            result = injector.channel.execute(
+                step.host,
+                step.inject_command,
+                timeout=injector.config.timeout,
+                wal_payload={
+                    "session_id": injector.session_id,
+                    "host": step.host.name,
+                    "rollback_command": step.rollback_command,
+                },
+            )
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            reports.append(
+                ActionReport(
+                    host=step.host.name,
+                    inject_command=step.inject_command,
+                    rollback_command=step.rollback_command,
+                    success=result.success,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    duration_ms=elapsed_ms,
+                    error=result.stderr,
+                )
+            )
+        return reports
