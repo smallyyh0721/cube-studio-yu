@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Optional
+
+from channel.base import LocalShellChannel
 
 
 @dataclass
@@ -159,18 +160,17 @@ def _mem_util() -> float:
 
 def _gpu_util() -> tuple[Optional[float], Optional[float]]:
     """Return (gpu_util_pct, gpu_mem_util_pct) via nvidia-smi, or (None, None)."""
-    cmd = shlex.split(
-        "nvidia-smi --query-gpu=utilization.gpu,utilization.memory "
-        "--format=csv,noheader,nounits"
+    cmd = " ".join(
+        [
+            "nvidia-smi",
+            shlex.quote("--query-gpu=utilization.gpu,utilization.memory"),
+            shlex.quote("--format=csv,noheader,nounits"),
+        ]
     )
+    channel = LocalShellChannel()
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
+        result = channel.execute(cmd, timeout=5)
+        if not result.success:
             return None, None
         first_line = result.stdout.strip().splitlines()[0]
         parts = [p.strip() for p in first_line.split(",")]

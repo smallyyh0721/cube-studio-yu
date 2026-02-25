@@ -6,9 +6,8 @@ import time
 import shlex
 import uuid
 
-from channel.ssh import HostSpec, SSHChannel
 from fault_injector.config import InjectorConfig
-from fault_injector.rollback import RollbackEntry, RollbackJournal
+from fault_injector.orchestrator.engine import FaultOrchestratorEngine
 
 
 @dataclass(slots=True)
@@ -23,13 +22,13 @@ class ActionReport:
 
 
 class FaultInjector:
-    """RoCE MTU mismatch fault injector with WAL-first rollback flow."""
+    """Backward-compatible facade that forwards to the new orchestrator engine."""
 
     def __init__(self, config: InjectorConfig, session_id: str | None = None) -> None:
         self.config = config
         self.session_id = session_id or uuid.uuid4().hex
-        self.channel = SSHChannel(mode=config.mode)
         self.journal = RollbackJournal(config.wal_path)
+        self.channel = SSHChannel(mode=config.mode, wal_hook=self._wal_prewrite)
 
         for srv in config.servers:
             self.channel.seed_simulated_mtu(srv.name, srv.interface, srv.original_mtu)
@@ -53,6 +52,11 @@ class FaultInjector:
                 HostSpec(name=srv.name, host=srv.host, user=srv.user, port=srv.port),
                 inject_command,
                 timeout=self.config.timeout,
+                wal_payload={
+                    "session_id": self.session_id,
+                    "host": srv.name,
+                    "rollback_command": rollback_command,
+                },
             )
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             reports.append(
@@ -98,3 +102,12 @@ class FaultInjector:
     def _build_set_mtu_command(interface: str, mtu: int) -> str:
         iface = shlex.quote(interface)
         return f"sudo ip link set dev {iface} mtu {int(mtu)}"
+
+    def _wal_prewrite(self, payload: dict[str, str]) -> None:
+        self.journal.record(
+            RollbackEntry(
+                session_id=payload["session_id"],
+                host=payload["host"],
+                rollback_command=payload["rollback_command"],
+            )
+        )

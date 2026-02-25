@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict
+from pathlib import Path
 
 from fault_injector.config import load_config
 from fault_injector.orchestrator import FaultInjectionOrchestrator
@@ -19,8 +20,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("inject-roce-mtu-mismatch")
-    subparsers.add_parser("rollback")
+
+    run = subparsers.add_parser("run", help="Run fault scenario")
+    run.add_argument("--config", required=True, help="Path to injector conf json config")
+    run.add_argument("--scenario", required=True, help="Scenario id")
+    run.add_argument("--session-id", required=True, help="Session id for WAL")
+    run.add_argument("--only", nargs="+", default=[], help="Only run against these server names")
+    run.add_argument("--resume", action="store_true", help="Rollback previous WAL entries before run")
+
+    validate = subparsers.add_parser("validate-config", help="Validate config file")
+    validate.add_argument("--config", required=True, help="Path to injector conf json config")
+
+    subparsers.add_parser("list-scenarios", help="List available scenarios")
     return parser
 
 
@@ -39,6 +50,9 @@ def main() -> None:
     print(f"report.json: {run_result['report_json']}")
     print(f"report.html: {run_result['report_html']}")
 
+def render_output(payload: dict, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
 
-if __name__ == "__main__":
-    main()
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
