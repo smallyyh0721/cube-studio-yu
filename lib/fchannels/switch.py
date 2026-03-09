@@ -17,7 +17,7 @@ from ncclient import manager
 from ncclient.operations import RPCError
 
 from fault_injector.config.schema import ChannelResult
-from lib.channels.base import BaseChannel
+from lib.fchannels.base import BaseChannel
 
 logger = logging.getLogger(__name__)
 

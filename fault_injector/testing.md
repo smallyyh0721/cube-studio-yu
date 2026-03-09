@@ -73,7 +73,7 @@
 - Session ID: `d022cf8d`
 - Result: pass (`inject/recover/verify` all true)
 - Evidence file:
-  - `fault-reports/sessions/d022cf8d/session.json`
+  - `fault_injector/fault_reports/sessions/d022cf8d/session.json`
 
 ### Common failure patterns and fixes
 - If error contains `pyghmi is not installed`:

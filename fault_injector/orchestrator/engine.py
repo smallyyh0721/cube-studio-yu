@@ -34,12 +34,12 @@ from fault_injector.safety.guard import SafetyGuard
 from fault_injector.safety.rollback import RollbackJournal
 from fault_injector.scenarios.base import FaultContext
 from fault_injector.scenarios.registry import SCENARIO_REGISTRY
-from lib.channels.kubernetes import K8sChannel
-from lib.channels.ipmi import IPMIChannel
-from lib.channels.prometheus import PrometheusChannel
-from lib.channels.redfish import RedfishChannel
-from lib.channels.ssh import SSHChannel
-from lib.channels.switch import SwitchChannel
+from lib.fchannels.kubernetes import K8sChannel
+from lib.fchannels.ipmi import IPMIChannel
+from lib.fchannels.prometheus import PrometheusChannel
+from lib.fchannels.redfish import RedfishChannel
+from lib.fchannels.ssh import SSHChannel
+from lib.fchannels.switch import SwitchChannel
 
 logger = logging.getLogger(__name__)
 _MONITOR_PLACEHOLDER_PATTERN = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -244,8 +244,11 @@ class FaultOrchestrator:
 
     def _default_monitor_queries(self) -> dict[str, str]:
         return {
-            "cpu_util": "avg(rate(node_cpu_seconds_total{mode!='idle'}[1m]))",
-            "memory_util": "avg(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+            "cpu_util": "avg(1 - rate(node_cpu_seconds_total{mode='idle'}[1m]))",
+            "memory_util": "avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))",
+            "gpu_util": "avg(DCGM_FI_DEV_GPU_UTIL)",
+            "gpu_memory_used_mb": "avg(DCGM_FI_DEV_FB_USED)",
+            "gpu_power_watts": "avg(DCGM_FI_DEV_POWER_USAGE)",
         }
 
     def _evaluate_baseline_quality(self, baseline: dict[str, list[float]]) -> None:
@@ -742,7 +745,7 @@ class FaultOrchestrator:
             await self.ipmi.close()
 
     @classmethod
-    async def resume(cls, session_id: str, session_dir: str = "./fault-reports/sessions/") -> Session:
+    async def resume(cls, session_id: str, session_dir: str = "./fault_injector/fault_reports/sessions/") -> Session:
         session = Session.load(session_id=session_id, session_dir=session_dir)
         if session is None:
             raise OrchestrationError(f"Session not found: {session_id}")

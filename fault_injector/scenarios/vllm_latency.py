@@ -152,11 +152,6 @@ def _result_error(result) -> str:
     return (result.error or result.output or "").strip()
 
 
-def _is_endpoint_not_supported(message: str) -> bool:
-    text = (message or "").lower()
-    return "404" in text or "not found" in text or "http status error '404" in text
-
-
 def _is_unauthorized_error(message: str) -> bool:
     text = (message or "").lower()
     return "401" in text or "unauthorized" in text
@@ -209,92 +204,23 @@ def _temperature_snapshot(thermal_payload: dict[str, Any]) -> dict[str, Any]:
     return {"temperature_count": len(temps), "temperatures_sample": sample}
 
 
-def _extract_sensor_list(payload: dict[str, Any], limit: int = 12) -> list[dict[str, Any]]:
-    sensors = payload.get("sensors", [])
-    if not isinstance(sensors, list):
-        return []
-    out: list[dict[str, Any]] = []
-    for item in sensors[:limit]:
-        if isinstance(item, dict):
-            out.append(item)
-    return out
-
-
-async def _ipmi_collect_snapshot(ctx: FaultContext, ipmi_cfg: Any) -> dict[str, Any]:
-    if not ctx.ipmi:
-        return {
-            "host": ipmi_cfg.host,
-            "interface": ipmi_cfg.interface,
-            "mc_info_ok": False,
-            "fan_query_ok": False,
-            "temp_query_ok": False,
-            "mc_info_excerpt": "",
-            "fan_sensors": [],
-            "temperature_sensors": [],
-            "errors": ["IPMI channel not initialized"],
-        }
-
-    timeout = int(getattr(ipmi_cfg, "timeout", 30) or 30)
-    host = str(ipmi_cfg.host)
-    username = str(ipmi_cfg.username or "")
-    password = str(ipmi_cfg.password or "")
-    port = int(getattr(ipmi_cfg, "port", 623) or 623)
-    interface = str(getattr(ipmi_cfg, "interface", "lanplus") or "lanplus")
-
-    mc_info = await ctx.ipmi.get_mc_info(
-        host=host,
-        username=username,
-        password=password,
-        port=port,
-        interface=interface,
-        timeout=timeout,
-    )
-    fan_data = await ctx.ipmi.get_sensor_data(
-        host=host,
-        username=username,
-        password=password,
-        sensor_type="fan",
-        port=port,
-        interface=interface,
-        timeout=timeout,
-    )
-    temp_data = await ctx.ipmi.get_sensor_data(
-        host=host,
-        username=username,
-        password=password,
-        sensor_type="temperature",
-        port=port,
-        interface=interface,
-        timeout=timeout,
-    )
-
-    mc_payload = _parse_json_payload(mc_info.output)
-    fan_payload = _parse_json_payload(fan_data.output)
-    temp_payload = _parse_json_payload(temp_data.output)
+def _web_fan_snapshot(payload: dict[str, Any], limit: int = 8) -> dict[str, Any]:
+    fans: list[dict[str, Any]] = []
+    if isinstance(payload.get("Fans"), list):
+        fans = [x for x in payload.get("Fans", []) if isinstance(x, dict)]
+    elif isinstance(payload.get("fans"), list):
+        fans = [x for x in payload.get("fans", []) if isinstance(x, dict)]
+    elif isinstance(payload.get("data"), list):
+        fans = [x for x in payload.get("data", []) if isinstance(x, dict)]
+    elif isinstance(payload.get("data"), dict):
+        maybe_fans = payload.get("data", {}).get("fans", [])
+        if isinstance(maybe_fans, list):
+            fans = [x for x in maybe_fans if isinstance(x, dict)]
     return {
-        "host": host,
-        "interface": interface,
-        "mc_info_ok": bool(mc_info.success),
-        "fan_query_ok": bool(fan_data.success),
-        "temp_query_ok": bool(temp_data.success),
-        "mc_info_excerpt": json.dumps(mc_payload, ensure_ascii=False)[:400] if mc_payload else "",
-        "fan_sensors": _extract_sensor_list(fan_payload),
-        "temperature_sensors": _extract_sensor_list(temp_payload),
-        "errors": [e for e in [mc_info.error, fan_data.error, temp_data.error] if e],
+        "fan_count": len(fans),
+        "fans_sample": fans[:limit],
+        "raw_excerpt": json.dumps(payload, ensure_ascii=False)[:500],
     }
-
-
-def _build_ipmi_profile_commands(profile: str, target_pwm: int) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
-    if profile == "supermicro_raw":
-        percent = max(0, min(100, target_pwm))
-        pwm_byte = int(round((percent / 100.0) * 255))
-        set_manual_and_pwm = [
-            {"netfn": 0x30, "command": 0x30, "data": [0x01, 0x00]},
-            {"netfn": 0x30, "command": 0x30, "data": [0x02, 0xFF, pwm_byte]},
-        ]
-        set_auto = {"netfn": 0x30, "command": 0x30, "data": [0x01, 0x01]}
-        return set_manual_and_pwm, set_auto
-    return None, None
 
 
 async def _resolve_python_interpreter(ctx: FaultContext) -> str:
@@ -970,8 +896,14 @@ class ThermalThrottlingScenario(BaseScenario):
         gpu_id = int(ctx.params.get("gpu_id", 0))
         power_limit = int(ctx.params.get("power_limit", 150))
         fan_backend = str(ctx.params.get("fan_control_backend", "auto")).strip().lower()
-        ipmi_profile = str(ctx.params.get("ipmi_profile", "read_only")).strip().lower()
-        ipmi_target_pwm = int(ctx.params.get("ipmi_target_pwm", ctx.params.get("fan_pwm", 30)))
+        if fan_backend in ("", "auto"):
+            fan_backend = "redfish"
+        if fan_backend not in ("redfish", ""):
+            return InjectResult(
+                success=False,
+                fault_id=ctx.fault_id,
+                error=f"Unsupported fan_control_backend: {fan_backend}. Only 'redfish' is supported.",
+            )
         if not ctx.redfish:
             return InjectResult(success=False, fault_id=ctx.fault_id, error="Redfish channel not initialized")
         if not ctx.target_redfish:
@@ -989,15 +921,11 @@ class ThermalThrottlingScenario(BaseScenario):
         fan_injected_backend = ""
         created_session = False
         try:
-            if bmc_cfg.token:
-                ctx.redfish.set_token(bmc_host, bmc_cfg.token)
-            else:
-                if not bmc_cfg.username or not bmc_cfg.password:
-                    return InjectResult(
-                        success=False,
-                        fault_id=ctx.fault_id,
-                        error="Missing Redfish credentials (username/password)",
-                    )
+            if bmc_cfg.username and bmc_cfg.password:
+                ctx.redfish.set_web_credentials(bmc_host, bmc_cfg.username, bmc_cfg.password)
+
+            # For web fan APIs, create a fresh session first when credentials exist.
+            if bmc_cfg.username and bmc_cfg.password:
                 auth = await ctx.redfish.authenticate(
                     bmc_host=bmc_host,
                     username=bmc_cfg.username,
@@ -1005,8 +933,25 @@ class ThermalThrottlingScenario(BaseScenario):
                     verify_tls=verify_tls,
                 )
                 if not auth.success:
-                    return InjectResult(success=False, fault_id=ctx.fault_id, error=f"Redfish auth failed: {auth.error}")
-                created_session = True
+                    if bmc_cfg.token:
+                        ctx.redfish.set_token(bmc_host, bmc_cfg.token)
+                        fan_inject_warning = f"{fan_inject_warning}; Redfish session create failed, fallback to token".strip("; ")
+                    else:
+                        return InjectResult(
+                            success=False,
+                            fault_id=ctx.fault_id,
+                            error=f"Redfish auth failed: {auth.error}",
+                        )
+                else:
+                    created_session = True
+            elif bmc_cfg.token:
+                ctx.redfish.set_token(bmc_host, bmc_cfg.token)
+            else:
+                return InjectResult(
+                    success=False,
+                    fault_id=ctx.fault_id,
+                    error="Missing Redfish credentials (username/password) or token",
+                )
 
             thermal = await ctx.redfish.get_thermal(bmc_host=bmc_host, verify_tls=verify_tls)
             if not thermal.success:
@@ -1042,113 +987,52 @@ class ThermalThrottlingScenario(BaseScenario):
                 else []
             )
 
-            if fan_backend != "ipmi":
-                set_fan = await ctx.redfish.set_fan_control(
-                    bmc_host=bmc_host,
-                    fan_index=fan_index,
-                    mode=fan_mode,
-                    pwm=fan_pwm,
-                    verify_tls=verify_tls,
+            web_fan_before_result = await ctx.redfish.get_web_fan_status(
+                bmc_host=bmc_host,
+                verify_tls=verify_tls,
+            )
+            web_fan_before_payload = _parse_json_payload(web_fan_before_result.output)
+            if not web_fan_before_result.success:
+                set_fan_error = _result_error(web_fan_before_result)
+                return InjectResult(
+                    success=False,
                     fault_id=ctx.fault_id,
+                    error=f"Redfish web fan-status precheck failed: {set_fan_error}",
                 )
-                if not set_fan.success:
-                    set_fan_error = _result_error(set_fan)
-                    if _is_endpoint_not_supported(set_fan_error):
-                        fan_inject_warning = set_fan_error
-                        logger.warning("Redfish fan inject endpoint unsupported on %s: %s", bmc_host, set_fan_error)
-                    else:
-                        return InjectResult(
-                            success=False,
-                            fault_id=ctx.fault_id,
-                            error=f"Redfish fan inject failed: {set_fan_error}",
-                        )
-                else:
-                    fan_inject_applied = True
-                    fan_injected_backend = "redfish"
 
-            should_try_ipmi = fan_backend == "ipmi" or (fan_backend == "auto" and not fan_inject_applied)
-            if should_try_ipmi:
-                strict_ipmi = fan_backend == "ipmi"
-                if not ctx.target_ipmi:
-                    if strict_ipmi:
-                        return InjectResult(success=False, fault_id=ctx.fault_id, error="Missing target IPMI config for node")
-                    fan_inject_warning = f"{fan_inject_warning}; Missing target IPMI config for node".strip("; ")
-                else:
-                    ipmi_cfg = ctx.target_ipmi
-                    ipmi_pre = await _ipmi_collect_snapshot(ctx, ipmi_cfg)
-                    ctx.params["ipmi_precheck"] = ipmi_pre
-                    manual_cmds, auto_cmd = _build_ipmi_profile_commands(ipmi_profile, ipmi_target_pwm)
-                    if ipmi_profile == "read_only":
-                        if strict_ipmi:
-                            return InjectResult(
-                                success=False,
-                                fault_id=ctx.fault_id,
-                                error="IPMI backend requested but ipmi_profile is read_only",
-                            )
-                        fan_inject_warning = f"{fan_inject_warning}; IPMI profile read_only, skipped injection".strip("; ")
-                    elif manual_cmds is None or auto_cmd is None:
-                        if strict_ipmi:
-                            return InjectResult(
-                                success=False,
-                                fault_id=ctx.fault_id,
-                                error=f"Unsupported IPMI profile: {ipmi_profile}",
-                            )
-                        fan_inject_warning = f"{fan_inject_warning}; Unsupported IPMI profile: {ipmi_profile}".strip("; ")
-                    else:
-                        command_results: list[dict[str, Any]] = []
-                        ipmi_ok = True
-                        ipmi_error = ""
-                        if not ctx.ipmi:
-                            ipmi_ok = False
-                            ipmi_error = "IPMI channel not initialized"
-                        for raw_cmd in manual_cmds:
-                            if not ctx.ipmi:
-                                break
-                            raw_result = await ctx.ipmi.raw_command(
-                                host=str(ipmi_cfg.host),
-                                username=str(ipmi_cfg.username or ""),
-                                password=str(ipmi_cfg.password or ""),
-                                netfn=int(raw_cmd["netfn"]),
-                                command=int(raw_cmd["command"]),
-                                data=[int(x) for x in raw_cmd.get("data", [])],
-                                port=int(getattr(ipmi_cfg, "port", 623) or 623),
-                                interface=str(getattr(ipmi_cfg, "interface", "lanplus") or "lanplus"),
-                                timeout=int(getattr(ipmi_cfg, "timeout", 30) or 30),
-                            )
-                            command_results.append(
-                                {
-                                    "command": raw_cmd,
-                                    "success": bool(raw_result.success),
-                                    "output": raw_result.output,
-                                    "error": raw_result.error,
-                                }
-                            )
-                            if not raw_result.success:
-                                ipmi_ok = False
-                                ipmi_error = _result_error(raw_result)
-                                break
-                        ipmi_post = await _ipmi_collect_snapshot(ctx, ipmi_cfg)
-                        ctx.params["ipmi_inject"] = {
-                            "profile": ipmi_profile,
-                            "target_pwm": ipmi_target_pwm,
-                            "before": ipmi_pre,
-                            "after": ipmi_post,
-                            "commands": command_results,
-                            "recover_command": auto_cmd,
-                            "applied": ipmi_ok,
-                            "error": ipmi_error,
-                        }
-                        if not ipmi_ok:
-                            if strict_ipmi:
-                                return InjectResult(
-                                    success=False,
-                                    fault_id=ctx.fault_id,
-                                    error=f"IPMI fan inject command failed: {ipmi_error}",
-                                )
-                            fan_inject_warning = f"{fan_inject_warning}; IPMI fan inject skipped: {ipmi_error}".strip("; ")
-                        else:
-                            fan_inject_applied = True
-                            fan_injected_backend = "ipmi"
+            set_fan = await ctx.redfish.set_fan_control(
+                bmc_host=bmc_host,
+                fan_index=fan_index,
+                mode=fan_mode,
+                pwm=fan_pwm,
+                verify_tls=verify_tls,
+                fault_id=ctx.fault_id,
+            )
+            if not set_fan.success:
+                set_fan_error = _result_error(set_fan)
+                return InjectResult(
+                    success=False,
+                    fault_id=ctx.fault_id,
+                    error=f"Redfish fan inject failed: {set_fan_error}",
+                )
+
+            fan_inject_applied = True
+            fan_injected_backend = "redfish"
+            web_fan_after_result = await ctx.redfish.get_web_fan_status(
+                bmc_host=bmc_host,
+                verify_tls=verify_tls,
+            )
+            if not web_fan_after_result.success:
+                set_fan_error = _result_error(web_fan_after_result)
+                return InjectResult(
+                    success=False,
+                    fault_id=ctx.fault_id,
+                    error=f"Redfish web fan-status postcheck failed: {set_fan_error}",
+                )
+            ctx.params["web_fan_inject_snapshot"] = {
+                "before": _web_fan_snapshot(web_fan_before_payload),
+                "after": _web_fan_snapshot(_parse_json_payload(web_fan_after_result.output)),
+            }
 
             thermal_after_result = await ctx.redfish.get_thermal(bmc_host=bmc_host, verify_tls=verify_tls)
             if (
@@ -1256,24 +1140,34 @@ class ThermalThrottlingScenario(BaseScenario):
             verify_tls = bool(bmc_cfg.verify_tls)
             created_session = False
             try:
-                if bmc_cfg.token:
-                    ctx.redfish.set_token(bmc_host, bmc_cfg.token)
-                else:
-                    if not bmc_cfg.username or not bmc_cfg.password:
-                        redfish_recover_success = False
-                        redfish_recover_error = "Missing Redfish credentials for fan recovery"
-                    else:
-                        auth = await ctx.redfish.authenticate(
-                            bmc_host=bmc_host,
-                            username=bmc_cfg.username,
-                            password=bmc_cfg.password,
-                            verify_tls=verify_tls,
-                        )
-                        if not auth.success:
+                if bmc_cfg.username and bmc_cfg.password:
+                    ctx.redfish.set_web_credentials(bmc_host, bmc_cfg.username, bmc_cfg.password)
+                if bmc_cfg.username and bmc_cfg.password:
+                    auth = await ctx.redfish.authenticate(
+                        bmc_host=bmc_host,
+                        username=bmc_cfg.username,
+                        password=bmc_cfg.password,
+                        verify_tls=verify_tls,
+                    )
+                    if not auth.success:
+                        if bmc_cfg.token:
+                            ctx.redfish.set_token(bmc_host, bmc_cfg.token)
+                        else:
                             redfish_recover_success = False
                             redfish_recover_error = f"Redfish auth failed in recovery: {auth.error}"
-                        else:
-                            created_session = True
+                    else:
+                        created_session = True
+                elif bmc_cfg.token:
+                    ctx.redfish.set_token(bmc_host, bmc_cfg.token)
+                else:
+                    redfish_recover_success = False
+                    redfish_recover_error = "Missing Redfish credentials for fan recovery"
+
+                if redfish_recover_success:
+                    web_pre = await ctx.redfish.get_web_fan_status(bmc_host=bmc_host, verify_tls=verify_tls)
+                    if not web_pre.success:
+                        redfish_recover_success = False
+                        redfish_recover_error = f"Redfish web fan-status pre-recover check failed: {_result_error(web_pre)}"
 
                 if redfish_recover_success:
                     pre = await ctx.redfish.get_thermal(bmc_host=bmc_host, verify_tls=verify_tls)
@@ -1292,11 +1186,23 @@ class ThermalThrottlingScenario(BaseScenario):
                     else:
                         pre_payload = _parse_json_payload(pre.output) if pre.success else {}
                         post_payload = _parse_json_payload(post.output) if post.success else {}
+                        web_post = await ctx.redfish.get_web_fan_status(bmc_host=bmc_host, verify_tls=verify_tls)
+                        if not web_post.success:
+                            redfish_recover_success = False
+                            redfish_recover_error = (
+                                f"Redfish web fan-status post-recover check failed: {_result_error(web_post)}"
+                            )
                         ctx.params["bmc_recover_snapshot"] = {
                             "fan_before_recover": _fan_snapshot(pre_payload),
                             "fan_after_recover": _fan_snapshot(post_payload),
                             "temperature_before_recover": _temperature_snapshot(pre_payload),
                             "temperature_after_recover": _temperature_snapshot(post_payload),
+                            "web_fan_before_recover": _web_fan_snapshot(_parse_json_payload(web_pre.output)),
+                            "web_fan_after_recover": (
+                                _web_fan_snapshot(_parse_json_payload(web_post.output))
+                                if web_post.success
+                                else {}
+                            ),
                         }
             finally:
                 if created_session:
@@ -1304,62 +1210,7 @@ class ThermalThrottlingScenario(BaseScenario):
                     if not logout.success:
                         logger.warning("Redfish logout failed for %s during recovery: %s", bmc_host, logout.error)
 
-        ipmi_recover_success = True
-        ipmi_recover_error = ""
-        if ctx.params.get("_fan_injected") and injected_backend == "ipmi":
-            if not ctx.target_ipmi:
-                ipmi_recover_success = False
-                ipmi_recover_error = "Missing target IPMI config for fan recovery"
-            else:
-                ipmi_cfg = ctx.target_ipmi
-                profile = str(ctx.params.get("ipmi_profile", "read_only")).strip().lower()
-                _, auto_cmd = _build_ipmi_profile_commands(profile, int(ctx.params.get("ipmi_target_pwm", 30)))
-                if not auto_cmd:
-                    ipmi_recover_success = False
-                    ipmi_recover_error = f"Unsupported IPMI profile for recovery: {profile}"
-                else:
-                    pre = await _ipmi_collect_snapshot(ctx, ipmi_cfg)
-                    if not ctx.ipmi:
-                        ipmi_recover_success = False
-                        ipmi_recover_error = "IPMI channel not initialized"
-                        post = await _ipmi_collect_snapshot(ctx, ipmi_cfg)
-                        ctx.params["ipmi_recover_snapshot"] = {
-                            "before": pre,
-                            "after": post,
-                            "command": auto_cmd,
-                            "command_success": False,
-                            "output": "",
-                            "error": ipmi_recover_error,
-                        }
-                    else:
-                        recover_result = await ctx.ipmi.raw_command(
-                            host=str(ipmi_cfg.host),
-                            username=str(ipmi_cfg.username or ""),
-                            password=str(ipmi_cfg.password or ""),
-                            netfn=int(auto_cmd["netfn"]),
-                            command=int(auto_cmd["command"]),
-                            data=[int(x) for x in auto_cmd.get("data", [])],
-                            port=int(getattr(ipmi_cfg, "port", 623) or 623),
-                            interface=str(getattr(ipmi_cfg, "interface", "lanplus") or "lanplus"),
-                            timeout=int(getattr(ipmi_cfg, "timeout", 30) or 30),
-                        )
-                        ok = bool(recover_result.success)
-                        out = recover_result.output
-                        err = recover_result.error
-                        post = await _ipmi_collect_snapshot(ctx, ipmi_cfg)
-                        ctx.params["ipmi_recover_snapshot"] = {
-                            "before": pre,
-                            "after": post,
-                            "command": auto_cmd,
-                            "command_success": ok,
-                            "output": out,
-                            "error": err,
-                        }
-                        if not ok:
-                            ipmi_recover_success = False
-                            ipmi_recover_error = f"IPMI fan recovery failed: {err or out or auto_cmd}"
-
-        success = bool(ssh_recover_success and redfish_recover_success and ipmi_recover_success)
+        success = bool(ssh_recover_success and redfish_recover_success)
         _mark_recovered_or_failed(ctx, success)
         if success:
             return RecoverResult(success=True, fault_id=ctx.fault_id)
@@ -1369,11 +1220,6 @@ class ThermalThrottlingScenario(BaseScenario):
                 error = f"{error}; {redfish_recover_error}"
             else:
                 error = redfish_recover_error
-        if ipmi_recover_error:
-            if error:
-                error = f"{error}; {ipmi_recover_error}"
-            else:
-                error = ipmi_recover_error
         return RecoverResult(success=False, fault_id=ctx.fault_id, error=error)
 
     async def verify(self, ctx: FaultContext) -> bool:

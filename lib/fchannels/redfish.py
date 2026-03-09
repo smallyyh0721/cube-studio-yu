@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import json
 import logging
+from urllib.parse import urlsplit
 from typing import Any
 
 import httpx
 
-from lib.channels.base import BaseChannel
+from lib.fchannels.base import BaseChannel
 from fault_injector.config.schema import ChannelResult
 from fault_injector.safety.guard import SafetyViolationError
 
@@ -41,21 +42,35 @@ class RedfishChannel(BaseChannel):
         self.timeout = timeout
         self.max_connections = max_connections
         self._clients: dict[str, httpx.AsyncClient] = {}
+        self._web_clients: dict[str, httpx.AsyncClient] = {}
+        self._web_credentials: dict[str, dict[str, str]] = {}
+        self._web_csrf_tokens: dict[str, str] = {}
         self._tokens: dict[str, str] = {}
         self._session_locations: dict[str, str] = {}
 
-    async def _get_client(self, bmc_host: str, verify_tls: bool = True) -> httpx.AsyncClient:
-        key = f"{bmc_host}|{verify_tls}"
-        client = self._clients.get(key)
+    @staticmethod
+    def _build_base_url(bmc_host: str, scheme: str) -> str:
+        parsed = urlsplit(bmc_host)
+        if parsed.scheme and parsed.netloc:
+            return bmc_host
+        if parsed.scheme and parsed.path:
+            return bmc_host
+        host = bmc_host.strip().strip("/")
+        return f"{scheme}://{host}"
+
+    async def _get_client(self, bmc_host: str, verify_tls: bool = True, scheme: str = "https") -> httpx.AsyncClient:
+        key = f"{bmc_host}|{verify_tls}|{scheme}"
+        client_pool = self._clients if scheme == "https" else self._web_clients
+        client = client_pool.get(key)
         if client is None:
             limits = httpx.Limits(max_connections=self.max_connections, max_keepalive_connections=10)
             client = httpx.AsyncClient(
-                base_url=f"https://{bmc_host}",
+                base_url=self._build_base_url(bmc_host, scheme=scheme),
                 timeout=self.timeout,
                 verify=verify_tls,
                 limits=limits,
             )
-            self._clients[key] = client
+            client_pool[key] = client
         return client
 
     async def authenticate(
@@ -87,6 +102,13 @@ class RedfishChannel(BaseChannel):
     def set_token(self, bmc_host: str, token: str) -> None:
         """Set a pre-existing Redfish session token."""
         self._tokens[bmc_host] = token
+
+    def set_web_credentials(self, bmc_host: str, username: str, password: str) -> None:
+        """Set BMC web credentials used by /api/* session login."""
+        self._web_credentials[bmc_host] = {
+            "username": username,
+            "password": password,
+        }
 
     async def get_service_root(self, bmc_host: str, verify_tls: bool = True) -> ChannelResult:
         return await self.execute(
@@ -173,6 +195,36 @@ class RedfishChannel(BaseChannel):
         fan_index: int,
         mode: str,
         pwm: int | None = None,
+        fan_bp_index: int = 0xFF,
+        verify_tls: bool = True,
+        fault_id: str | None = None,
+    ) -> ChannelResult:
+        return await self.set_web_fan_control(
+            bmc_host=bmc_host,
+            fan_index=fan_index,
+            mode=mode,
+            pwm=pwm,
+            fan_bp_index=fan_bp_index,
+            verify_tls=verify_tls,
+            fault_id=fault_id,
+        )
+
+    async def get_web_fan_status(self, bmc_host: str, verify_tls: bool = True) -> ChannelResult:
+        return await self.execute(
+            "get_web_fan_status",
+            {
+                "bmc_host": bmc_host,
+                "verify_tls": verify_tls,
+            },
+        )
+
+    async def set_web_fan_control(
+        self,
+        bmc_host: str,
+        fan_index: int,
+        mode: str,
+        pwm: int | None = None,
+        fan_bp_index: int = 0xFF,
         verify_tls: bool = True,
         fault_id: str | None = None,
     ) -> ChannelResult:
@@ -180,18 +232,20 @@ class RedfishChannel(BaseChannel):
             "bmc_host": bmc_host,
             "fan_index": fan_index,
             "mode": "Auto",
+            "fan_bp_index": fan_bp_index,
             "verify_tls": verify_tls,
         }
         return await self.execute(
-            "set_fan_control",
+            "set_web_fan_control",
             {
                 "bmc_host": bmc_host,
                 "fan_index": fan_index,
                 "mode": mode,
                 "pwm": pwm,
+                "fan_bp_index": fan_bp_index,
                 "verify_tls": verify_tls,
             },
-            recovery_action="set_fan_control",
+            recovery_action="set_web_fan_control",
             recovery_params=recover_params,
             fault_id=fault_id,
             target=bmc_host,
@@ -240,6 +294,8 @@ class RedfishChannel(BaseChannel):
             "discover_capabilities": self._discover_capabilities_impl,
             "request": self._request_impl,
             "set_fan_control": self._set_fan_control_impl,
+            "get_web_fan_status": self._get_web_fan_status_impl,
+            "set_web_fan_control": self._set_web_fan_control_impl,
             "reset_system": self._reset_system_impl,
         }
         handler = handlers.get(action)
@@ -301,6 +357,47 @@ class RedfishChannel(BaseChannel):
         token = self._tokens.get(bmc_host)
         return {"X-Auth-Token": token} if token else {}
 
+    async def _ensure_web_session(self, bmc_host: str, verify_tls: bool) -> tuple[bool, str]:
+        if self._web_csrf_tokens.get(bmc_host):
+            return True, ""
+
+        creds = self._web_credentials.get(bmc_host)
+        if not creds:
+            return False, "Missing BMC web credentials. Call set_web_credentials() first."
+
+        client = await self._get_client(bmc_host, verify_tls, scheme="http")
+        try:
+            resp = await client.post(
+                "/api/session",
+                data={
+                    "username": creds.get("username", ""),
+                    "password": creds.get("password", ""),
+                },
+                headers={
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
+                },
+            )
+            resp.raise_for_status()
+            body: dict[str, Any] = {}
+            if resp.text:
+                try:
+                    parsed = resp.json()
+                    if isinstance(parsed, dict):
+                        body = parsed
+                except ValueError:
+                    body = {}
+            ok_val = body.get("ok")
+            if ok_val not in (None, 0, "0", True):
+                return False, f"Web login failed with unexpected response: ok={ok_val!r}"
+            csrf = str(body.get("CSRFToken") or client.cookies.get("garc") or "").strip()
+            if not csrf:
+                return False, "Web login succeeded but CSRF token missing"
+            self._web_csrf_tokens[bmc_host] = csrf
+            return True, ""
+        except httpx.HTTPError as exc:
+            return False, f"Web session auth failed: {exc}"
+
     async def _fetch_json(
         self,
         *,
@@ -312,11 +409,32 @@ class RedfishChannel(BaseChannel):
         query: dict[str, Any] | None = None,
         requires_auth: bool = True,
     ) -> tuple[bool, dict[str, Any], str]:
-        if requires_auth and bmc_host not in self._tokens:
-            return False, {}, "Missing Redfish auth token. Call authenticate() first."
+        is_web_api = path.startswith("/api/")
+        if requires_auth:
+            if is_web_api:
+                web_ok, web_err = await self._ensure_web_session(bmc_host, verify_tls)
+                if not web_ok:
+                    return False, {}, web_err
+            elif bmc_host not in self._tokens:
+                return False, {}, "Missing Redfish auth token. Call authenticate() first."
 
-        client = await self._get_client(bmc_host, verify_tls)
-        headers = self._authorized_headers(bmc_host) if requires_auth else {}
+        client = await self._get_client(
+            bmc_host,
+            verify_tls,
+            scheme="http" if is_web_api else "https",
+        )
+        headers = self._authorized_headers(bmc_host) if (requires_auth and not is_web_api) else {}
+        if is_web_api:
+            headers = {
+                **headers,
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+            }
+            csrf = self._web_csrf_tokens.get(bmc_host)
+            if csrf:
+                headers["X-CSRFTOKEN"] = csrf
+            if payload:
+                headers["Content-Type"] = "application/json"
         try:
             resp = await client.request(
                 method=method.upper(),
@@ -548,15 +666,44 @@ class RedfishChannel(BaseChannel):
         return ChannelResult(success=True, output=self._dumps(data))
 
     async def _set_fan_control_impl(self, params: dict[str, Any]) -> ChannelResult:
-        payload: dict[str, Any] = {"FanControlMode": params["mode"], "FanIndex": params["fan_index"]}
-        if params.get("pwm") is not None:
-            payload["FanPWM"] = int(params["pwm"])
+        return await self._set_web_fan_control_impl(params)
+
+    async def _get_web_fan_status_impl(self, params: dict[str, Any]) -> ChannelResult:
+        return await self._request_impl(
+            {
+                "bmc_host": params["bmc_host"],
+                "method": "GET",
+                "path": "/api/fan-status",
+                "verify_tls": params.get("verify_tls", True),
+                "requires_auth": True,
+            }
+        )
+
+    async def _set_web_fan_control_impl(self, params: dict[str, Any]) -> ChannelResult:
+        mode_raw = params.get("mode")
+        if isinstance(mode_raw, str):
+            lower_mode = mode_raw.strip().lower()
+            if lower_mode in {"auto", "0"}:
+                fan_mode = 0
+            elif lower_mode in {"manual", "1"}:
+                fan_mode = 1
+            else:
+                fan_mode = int(mode_raw)
+        else:
+            fan_mode = int(mode_raw or 0)
+
+        payload: dict[str, Any] = {
+            "fanMode": fan_mode,
+            "fanBpIndex": int(params.get("fan_bp_index", 0xFF)),
+            "fanIndex": int(params.get("fan_index", 0)),
+            "pwm": int(params.get("pwm") if params.get("pwm") is not None else 0),
+        }
 
         return await self._request_impl(
             {
                 "bmc_host": params["bmc_host"],
-                "method": "PATCH",
-                "path": "/redfish/v1/Chassis/Self/Thermal/ThermalManagement",
+                "method": "POST",
+                "path": "/api/actions/fan-status",
                 "payload": payload,
                 "verify_tls": params.get("verify_tls", True),
                 "requires_auth": True,
@@ -578,6 +725,11 @@ class RedfishChannel(BaseChannel):
     async def close(self) -> None:
         for client in self._clients.values():
             await client.aclose()
+        for client in self._web_clients.values():
+            await client.aclose()
         self._clients.clear()
+        self._web_clients.clear()
+        self._web_credentials.clear()
+        self._web_csrf_tokens.clear()
         self._tokens.clear()
         self._session_locations.clear()

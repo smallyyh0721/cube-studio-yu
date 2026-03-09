@@ -13,7 +13,7 @@ from fault_injector.config.schema import (
 def get_default_config() -> FaultInjectorConfig:
     """获取默认配置"""
     global_config = GlobalConfig(
-        session_dir="./fault-reports/sessions/",
+        session_dir="./fault_injector/fault_reports/sessions/",
         log_level="INFO",
         safety=SafetyConfig(
             require_confirmation=True,
@@ -37,7 +37,7 @@ DEFAULT_CONFIG_YAML = """
 # AIDC Auto-SRE Fault Injector 默认配置
 
 global:
-  session_dir: "./fault-reports/sessions/"
+  session_dir: "./fault_injector/fault_reports/sessions/"
   log_level: "INFO"
   safety:
     require_confirmation: true

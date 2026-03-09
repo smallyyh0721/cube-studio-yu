@@ -284,6 +284,24 @@ def test_engine_aggregate_queries_should_use_configured_baseline_queries(tmp_pat
     }
 
 
+def test_engine_default_baseline_queries_should_include_cpu_and_gpu_metrics(tmp_path):
+    cfg = FaultInjectorConfig(
+        monitor={"enabled": False, "baseline_duration": 0, "post_recovery_duration": 0},
+        scenarios={},
+    )
+    cfg.global_.session_dir = str(tmp_path)
+    orchestrator = FaultOrchestrator(cfg, dry_run=True, session_dir=str(tmp_path))
+
+    queries = orchestrator._default_monitor_queries()
+    assert queries == {
+        "cpu_util": "avg(1 - rate(node_cpu_seconds_total{mode='idle'}[1m]))",
+        "memory_util": "avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))",
+        "gpu_util": "avg(DCGM_FI_DEV_GPU_UTIL)",
+        "gpu_memory_used_mb": "avg(DCGM_FI_DEV_FB_USED)",
+        "gpu_power_watts": "avg(DCGM_FI_DEV_POWER_USAGE)",
+    }
+
+
 @pytest.mark.asyncio
 async def test_engine_should_emit_baseline_quality_warning_for_required_non_zero_metric(tmp_path):
     cfg = FaultInjectorConfig(

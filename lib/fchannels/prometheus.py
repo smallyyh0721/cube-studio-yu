@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from lib.channels.base import BaseChannel
+from lib.fchannels.base import BaseChannel
 from fault_injector.config.schema import ChannelResult
 
 

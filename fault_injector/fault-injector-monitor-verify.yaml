@@ -11,7 +11,7 @@
 # =============================================================================
 
 global:
-  session_dir: "./fault-reports/sessions/"
+  session_dir: "./fault_injector/fault_reports/sessions/"
   log_level: "INFO"
   safety:
     require_confirmation: false
@@ -23,13 +23,26 @@ global:
 orchestrator:
   max_parallel_agents: 1
   observe_interval: 10
-  session_dir: "./fault-reports/sessions/"
+  session_dir: "./fault_injector/fault_reports/sessions/"
 
 monitor:
   enabled: true
   prometheus_url: "http://10.11.4.3:31260"
-  baseline_duration: 30
-  post_recovery_duration: 60
+  baseline_duration: 20
+  post_recovery_duration: 20
+  baseline_queries:
+    cpu_util: "avg(1 - rate(node_cpu_seconds_total{mode='idle'}[5m]))"
+    memory_util: "avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))"
+    gpu_util: "avg(DCGM_FI_DEV_GPU_UTIL)"
+    gpu_memory_used_mb: "avg(DCGM_FI_DEV_FB_USED)"
+    gpu_power_watts: "avg(DCGM_FI_DEV_POWER_USAGE)"
+  baseline_require_non_zero:
+    - cpu_util
+    - memory_util
+    - gpu_memory_used_mb
+    - gpu_power_watts
+  baseline_min_samples: 2
+  baseline_max_error_ratio: 0.3
 
 inventory:
   workers:
@@ -54,7 +67,7 @@ scenarios:
       jitter_ms: 5
       distribution: "normal"
       loss_pct: 0
-      duration: 30
+      duration: 20
       load_simulator:
         enabled: false
         config_path: "load_simulator/config/inference-soak.yaml"

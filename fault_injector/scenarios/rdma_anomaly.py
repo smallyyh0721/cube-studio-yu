@@ -1,6 +1,6 @@
 """RDMA anomaly scenarios (F-1 ~ F-6).
 
-All switch operations are executed via lib.channels.switch.SwitchChannel (NETCONF).
+All switch operations are executed via lib.fchannels.switch.SwitchChannel (NETCONF).
 """
 from __future__ import annotations
 

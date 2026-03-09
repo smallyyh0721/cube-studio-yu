@@ -103,7 +103,7 @@ class Session:
     def create(
         cls,
         config_hash: str = "",
-        session_dir: str = "./fault-reports/sessions/",
+        session_dir: str = "./fault_injector/fault_reports/sessions/",
     ) -> "Session":
         session_id = uuid.uuid4().hex[:8]
         base_dir = Path(session_dir) / session_id
@@ -118,7 +118,7 @@ class Session:
     def compute_config_hash(config_content: str) -> str:
         return hashlib.sha256(config_content.encode()).hexdigest()[:16]
 
-    def save(self, session_dir: str = "./fault-reports/sessions/") -> None:
+    def save(self, session_dir: str = "./fault_injector/fault_reports/sessions/") -> None:
         path = Path(session_dir) / self.session_id / "session.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
@@ -141,7 +141,7 @@ class Session:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
     @classmethod
-    def load(cls, session_id: str, session_dir: str = "./fault-reports/sessions/") -> "Session | None":
+    def load(cls, session_id: str, session_dir: str = "./fault_injector/fault_reports/sessions/") -> "Session | None":
         path = Path(session_dir) / session_id / "session.json"
         if not path.exists():
             return None

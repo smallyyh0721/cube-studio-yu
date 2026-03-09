@@ -4,7 +4,7 @@ Shared Switch channel fixtures.
 
 from __future__ import annotations
 
-from lib.channels.switch import InterfaceStatus
+from lib.fchannels.switch import InterfaceStatus
 
 SWITCH_DEVICES = {
     "sw1": {

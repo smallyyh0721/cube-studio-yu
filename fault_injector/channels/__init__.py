@@ -1,6 +1,6 @@
-"""Compatibility imports for channels now hosted under lib.channels."""
+"""Compatibility imports for channels now hosted under lib.fchannels."""
 
-from lib.channels import (
+from lib.fchannels import (
     BaseChannel,
     IPMIChannel,
     K8sChannel,

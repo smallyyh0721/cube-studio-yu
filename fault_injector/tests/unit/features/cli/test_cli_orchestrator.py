@@ -9,7 +9,7 @@ from fault_injector.orchestrator.session import Session
 def _config_yaml() -> str:
     return """
 global:
-  session_dir: \"./fault-reports/sessions/\"
+  session_dir: \"./fault_injector/fault_reports/sessions/\"
   safety:
     dry_run: true
 inventory:
@@ -72,7 +72,7 @@ def test_cli_run_can_disable_monitor_via_flag(monkeypatch, tmp_path):
     assert seen["monitor_enabled"] is False
 
 
-def test_cli_resume(monkeypatch):
+def test_cli_resume(monkeypatch, tmp_path):
     async def _fake_resume(session_id: str, session_dir: str):
         s = Session.create(config_hash="x", session_dir=session_dir)
         s.mark_recovered()
@@ -80,8 +80,11 @@ def test_cli_resume(monkeypatch):
 
     monkeypatch.setattr("fault_injector.cli.FaultOrchestrator.resume", _fake_resume)
 
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+
     runner = CliRunner()
-    result = runner.invoke(main, ["resume", "--session", "abc123"])
+    result = runner.invoke(main, ["resume", "--session", "abc123", "--session-dir", str(session_dir)])
 
     assert result.exit_code == 0
     assert "Resume recovery complete" in result.output

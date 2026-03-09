@@ -11,7 +11,7 @@ GUIDANCE FOR AI AGENTS:
 
 # AI Agent Instructions: Fault Injector
 
-最后更新: 2026-03-06
+最后更新: 2026-03-09
 
 ## Quick Start for AI Agents
 
@@ -43,7 +43,7 @@ Key principles:
 cube-studio/
 ├── fault_injector/
 ├── lib/
-│   └── channels/
+│   └── fchannels/
 ├── load_simulator/
 ├── myapp/
 ├── install/
@@ -57,6 +57,7 @@ cube-studio/
 fault_injector/
 ├── agents.md
 ├── cli.py
+├── pytest.ini
 ├── testing.md
 ├── agent_docs/
 ├── docs/
@@ -79,13 +80,14 @@ fault_injector/
 │   ├── mocktest/
 │   ├── scenario/
 │   └── unit/features/
+├── fault_reports/
 └── tools/
 ```
 
 ### Runtime channel modules
 
 ```text
-lib/channels/
+lib/fchannels/
 ├── base.py
 ├── kubernetes.py
 ├── prometheus.py
@@ -196,8 +198,8 @@ lib/channels/
 
 ### Adding a New Channel
 
-1. Add file under `lib/channels/`
-2. Inherit `BaseChannel` from `lib/channels/base.py`
+1. Add file under `lib/fchannels/`
+2. Inherit `BaseChannel` from `lib/fchannels/base.py`
 3. Implement `_execute_impl()`
 4. Add safety checks for dangerous operations
 5. Add tests in `fault_injector/tests/unit/features/channels/`
@@ -253,7 +255,8 @@ See `fault_injector/testing.md` for detailed strategy.
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-03-09 | 1.5 | Moved channels package to `lib/fchannels`, moved pytest config to `fault_injector/pytest.ini`, and moved reports to `fault_injector/fault_reports` |
 | 2026-03-06 | 1.4 | Updated code structure, completion status, progress snapshot, and next plan |
 | 2026-02-28 | 1.3 | Clarified agent-centric ownership and scenario-layer scope (RC/F families only) |
 | 2026-02-28 | 1.2 | Added agent-centric workflow guidance and new test tree entries |
-| 2026-02-27 | 1.1 | Updated project trees and moved channel module location to `lib/channels` |
+| 2026-02-27 | 1.1 | Updated project trees and moved channel module location to `lib/fchannels` |

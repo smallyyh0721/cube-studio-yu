@@ -12,7 +12,7 @@ from typing import Any
 
 import asyncssh
 
-from lib.channels.base import BaseChannel
+from lib.fchannels.base import BaseChannel
 from fault_injector.config.schema import (
     ChannelResult,
     SSHConfig,

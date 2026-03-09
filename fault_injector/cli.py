@@ -126,7 +126,7 @@ def validate_config_cmd(config_path: str) -> None:
 
 @main.command("recover")
 @click.option("--session", "session_id", type=str, required=True)
-@click.option("--session-dir", type=click.Path(exists=True, file_okay=False), default="./fault-reports/sessions/")
+@click.option("--session-dir", type=click.Path(exists=True, file_okay=False), default="./fault_injector/fault_reports/sessions/")
 def recover_cmd(session_id: str, session_dir: str) -> None:
     """Recover active faults from a session rollback journal."""
     journal_path = Path(session_dir) / session_id / "rollback.jsonl"
@@ -159,7 +159,7 @@ def recover_cmd(session_id: str, session_dir: str) -> None:
 
 @main.command("resume")
 @click.option("--session", "session_id", type=str, required=True)
-@click.option("--session-dir", type=click.Path(exists=True, file_okay=False), default="./fault-reports/sessions/")
+@click.option("--session-dir", type=click.Path(exists=True, file_okay=False), default="./fault_injector/fault_reports/sessions/")
 def resume_cmd(session_id: str, session_dir: str) -> None:
     """Recover-only resume for interrupted sessions."""
 

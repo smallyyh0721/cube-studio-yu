@@ -1,6 +1,6 @@
 ﻿# Fault Injector 与 Load Simulator 架构说明
 
-最后更新: 2026-03-06  
+最后更新: 2026-03-09  
 状态: Active
 
 ## 1. 文档范围
@@ -23,6 +23,8 @@
 - `fault_injector/agents/`: 分层代理（hardware/os/platform/service/monitor）
 - `fault_injector/safety/`: 安全检查与 WAL 回滚日志
 - `fault_injector/tests/`: unit/integration/e2e 与场景回归测试
+- `fault_injector/pytest.ini`: pytest 配置入口
+- `fault_injector/fault_reports/`: 默认会话与证据输出目录（已加入 .gitignore）
 
 ### 2.2 load_simulator
 
@@ -34,7 +36,7 @@
 
 ### 2.3 通道层
 
-fault_injector 运行时使用 `lib/channels`:
+fault_injector 运行时使用 `lib/fchannels`:
 - `ssh.py`
 - `prometheus.py`
 - `kubernetes.py`

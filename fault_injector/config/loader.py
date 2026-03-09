@@ -51,7 +51,7 @@ def _parse_config(raw: dict[str, Any]) -> FaultInjectorConfig:
         excluded_nodes=safety_raw.get("excluded_nodes", []),
     )
     global_config = GlobalConfig(
-        session_dir=global_raw.get("session_dir", "./fault-reports/sessions/"),
+        session_dir=global_raw.get("session_dir", "./fault_injector/fault_reports/sessions/"),
         log_level=global_raw.get("log_level", "INFO"),
         safety=safety,
     )

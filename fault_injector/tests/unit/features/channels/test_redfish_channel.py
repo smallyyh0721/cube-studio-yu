@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from lib.channels.redfish import RedfishChannel
+from lib.fchannels.redfish import RedfishChannel
 from fault_injector.tests.fixtures.redfish_fixture import (
     CHASSIS_COLLECTION,
     CHASSIS_SELF,
@@ -45,16 +45,24 @@ class FakeClient:
     def __init__(self, routes: dict[tuple[str, str], FakeResponse]):
         self.routes = routes
         self.last_headers: dict | None = None
+        self.last_method: str | None = None
+        self.last_url: str | None = None
+        self.last_json: dict | None = None
+        self.last_data: dict | None = None
 
-    async def request(self, method: str, url: str, headers=None, json=None, params=None):
+    async def request(self, method: str, url: str, headers=None, json=None, params=None, data=None):
         self.last_headers = headers or {}
+        self.last_method = method.upper()
+        self.last_url = url
+        self.last_json = json
+        self.last_data = data
         key = (method.upper(), url)
         if key not in self.routes:
             return FakeResponse(404, {"error": "not found"})
         return self.routes[key]
 
-    async def post(self, url: str, json=None, headers=None):
-        return await self.request("POST", url, headers=headers, json=json)
+    async def post(self, url: str, json=None, headers=None, data=None):
+        return await self.request("POST", url, headers=headers, json=json, data=data)
 
     async def delete(self, url: str, headers=None):
         return await self.request("DELETE", url, headers=headers)
@@ -163,6 +171,50 @@ class TestRedfishChannelAuthAndSafety:
         assert redfish_channel._tokens[TEST_BMC_HOST] == TEST_TOKEN
         assert thermal.success is True
         assert fake_client.last_headers == {"X-Auth-Token": TEST_TOKEN}
+
+    @pytest.mark.asyncio
+    async def test_should_use_web_fan_status_endpoints_for_fan_control(self, redfish_channel):
+        routes = {
+            ("POST", "/api/session"): FakeResponse(200, {"ok": 0, "CSRFToken": "mock-csrf-token"}),
+            ("GET", "/api/fan-status"): FakeResponse(200, {"fans": [{"id": 0, "mode": "Manual", "pwm": 30}]}),
+            ("POST", "/api/actions/fan-status"): FakeResponse(200, {"ok": True}),
+        }
+        fake_client = FakeClient(routes)
+        redfish_channel.set_web_credentials(TEST_BMC_HOST, TEST_USERNAME, TEST_PASSWORD)
+
+        async def _mock_get_client(*args, **kwargs):
+            return fake_client
+
+        redfish_channel._get_client = _mock_get_client  # type: ignore[method-assign]
+
+        get_result = await redfish_channel.get_web_fan_status(TEST_BMC_HOST, verify_tls=False)
+        assert get_result.success is True
+        assert fake_client.last_method == "GET"
+        assert fake_client.last_url == "/api/fan-status"
+        assert fake_client.last_data is None
+        assert fake_client.last_headers == {
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-CSRFTOKEN": "mock-csrf-token",
+        }
+
+        set_result = await redfish_channel.set_fan_control(
+            bmc_host=TEST_BMC_HOST,
+            fan_index=0,
+            mode="Manual",
+            pwm=30,
+            verify_tls=False,
+        )
+        assert set_result.success is True
+        assert fake_client.last_method == "POST"
+        assert fake_client.last_url == "/api/actions/fan-status"
+        assert fake_client.last_headers == {
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-CSRFTOKEN": "mock-csrf-token",
+            "Content-Type": "application/json",
+        }
+        assert fake_client.last_json == {"fanMode": 1, "fanBpIndex": 255, "fanIndex": 0, "pwm": 30}
 
     @pytest.mark.asyncio
     async def test_should_block_forbidden_reset_type_when_guard_enabled(self, redfish_channel):

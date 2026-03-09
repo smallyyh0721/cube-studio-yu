@@ -11,7 +11,7 @@
 # Global Configuration
 global:
   # Directory to store session data and rollback journals
-  session_dir: "./fault-reports/sessions/"
+  session_dir: "./fault_injector/fault_reports/sessions/"
   
   # Logging level: DEBUG, INFO, WARNING, ERROR
   log_level: "DEBUG"
@@ -43,6 +43,13 @@ monitor:
   baseline_duration: 60
   # Post-recovery observation duration (seconds)
   post_recovery_duration: 60
+  # Optional explicit baseline metric profile.
+  baseline_queries:
+    cpu_util: "avg(1 - rate(node_cpu_seconds_total{mode='idle'}[5m]))"
+    memory_util: "avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))"
+    gpu_util: "avg(DCGM_FI_DEV_GPU_UTIL)"
+    gpu_memory_used_mb: "avg(DCGM_FI_DEV_FB_USED)"
+    gpu_power_watts: "avg(DCGM_FI_DEV_POWER_USAGE)"
 
 # =============================================================================
 # Target Node Inventory
@@ -160,10 +167,10 @@ scenarios:
     enabled: true
     target_nodes:
       - "worker-01"
-      - "worker-02"
-      - "worker-03"
+      #- "worker-02"
+      #- "worker-03"
     params:
-      duration: 180
+      duration: 30
       # Maps to gpu-burn "-m". Supports values like "60%" or "10240" (MB).
       memory: "90%"
       # Maps to gpu-burn "-i". Omit or set [] to apply to all GPUs.
@@ -180,14 +187,14 @@ scenarios:
     target_nodes:
       #- "worker-01"
       - "worker-02"
-      - "worker-03"
+      #- "worker-03"
     params:
       interface: "roce200"
       delay_ms: 45
       jitter_ms: 90
       distribution: "pareto"
       loss_pct: 0
-      duration: 180
+      duration: 30
       load_simulator:
         enabled: false
         config_path: "load_simulator/config/notebook-soak-only.yaml"
@@ -201,13 +208,13 @@ scenarios:
   # ---------------------------------------------------------------------------
   # Uses fio to add storage pressure that impacts latency.
   storage_io_interference:
-    enabled: false
+    enabled: true
     target_nodes:
       - "worker-01"
-      - "worker-02"
-      - "worker-03"
+      #- "worker-02"
+      #- "worker-03"
     params:
-      duration: 60
+      duration: 30
       filename: "/data/fault-injector-fio-testfile"
       rw_mode: "randwrite"
       bs: "4k"
@@ -219,11 +226,11 @@ scenarios:
   # ---------------------------------------------------------------------------
   # Injects platform dependency delay through tc netem.
   platform_cascade:
-    enabled: false
+    enabled: true
     target_nodes:
       - "worker-01"
-      - "worker-02"
-      - "worker-03"
+      #- "worker-02"
+      #- "worker-03"
     params:
       target_component: "mysql"
       interface: "roce200"
@@ -252,7 +259,7 @@ scenarios:
   # ---------------------------------------------------------------------------
   # Lowers GPU power limit to emulate thermal throttling behavior.
   thermal_throttling:
-    enabled: false
+    enabled: true
     target_nodes:
       - "worker-01"
       - "worker-02"
@@ -264,9 +271,7 @@ scenarios:
       fan_mode: "Manual"
       fan_pwm: 30
       fan_recover_mode: "Auto"
-      fan_control_backend: "ipmi"
-      ipmi_profile: "supermicro_raw"
-      ipmi_target_pwm: 30
+      fan_control_backend: "redfish"
 
   # Keep RDMA scenarios disabled for this vLLM latency test cycle.
   pfc_deadlock:
@@ -279,7 +284,7 @@ scenarios:
       switch: "sw-200g"
       interface: "200GE1/0/3"
       priority: 3
-      duration: 120
+      duration: 30
 
   ecn_misconfiguration:
     enabled: true
@@ -292,14 +297,14 @@ scenarios:
       interface: "200GE1/0/3"
       min_threshold: 10
       max_threshold: 20
-      duration: 120
+      duration: 30
 
   rdma_load_imbalance:
-    enabled: false
+    enabled: true
     target_nodes:
       - "worker-01"
-      - "worker-02"
-      - "worker-03"
+      #- "worker-02"
+      #- "worker-03"
     params:
       switch: "sw-200g"
       interface: "200GE1/0/4"
@@ -320,17 +325,17 @@ scenarios:
   roce_mtu_mismatch:
     enabled: true
     target_nodes:
-      - "worker-01"
-      - "worker-02"
+      #- "worker-01"
+      #- "worker-02"
       - "worker-03"
     params:
       interface: "roce200"
       mtu: 1500
       original_mtu: 9000
-      duration: 120
+      duration: 30
 
   rdma_qos_downgrade:
-    enabled: false
+    enabled: true
     target_nodes:
       - "worker-01"
       - "worker-02"
@@ -347,7 +352,7 @@ scenarios:
 # Uncomment below for a minimal test configuration:
 #
 # global:
-#   session_dir: "./fault-reports/sessions/"
+#   session_dir: "./fault_injector/fault_reports/sessions/"
 #   log_level: "DEBUG"
 #   safety:
 #     dry_run: true

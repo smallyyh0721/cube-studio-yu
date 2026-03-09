@@ -11,7 +11,7 @@
 # Global Configuration
 global:
   # Directory to store session data and rollback journals
-  session_dir: "./fault-reports/sessions/"
+  session_dir: "./fault_injector/fault_reports/sessions/"
   
   # Logging level: DEBUG, INFO, WARNING, ERROR
   log_level: "INFO"
@@ -239,7 +239,7 @@ scenarios:
 # Uncomment below for a minimal test configuration:
 #
 # global:
-#   session_dir: "./fault-reports/sessions/"
+#   session_dir: "./fault_injector/fault_reports/sessions/"
 #   log_level: "DEBUG"
 #   safety:
 #     dry_run: true

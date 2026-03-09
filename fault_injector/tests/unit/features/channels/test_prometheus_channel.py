@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from lib.channels.prometheus import PrometheusChannel
+from lib.fchannels.prometheus import PrometheusChannel
 
 
 @pytest.mark.asyncio

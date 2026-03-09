@@ -39,4 +39,4 @@ compile.py
 /reqs/
 .venv/
 /reports/
-/fault-reports/sessions/
+/fault_injector/fault_reports/

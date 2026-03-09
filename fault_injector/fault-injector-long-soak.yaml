@@ -11,7 +11,7 @@
 # =============================================================================
 
 global:
-  session_dir: "./fault-reports/sessions/"
+  session_dir: "./fault_injector/fault_reports/sessions/"
   log_level: "INFO"
   safety:
     require_confirmation: false
@@ -23,7 +23,7 @@ global:
 orchestrator:
   max_parallel_agents: 1
   observe_interval: 15
-  session_dir: "./fault-reports/sessions/"
+  session_dir: "./fault_injector/fault_reports/sessions/"
 
 monitor:
   enabled: true

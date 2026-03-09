@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from lib.channels.base import BaseChannel
+from lib.fchannels.base import BaseChannel
 from fault_injector.config.schema import ChannelResult
 from fault_injector.safety.guard import SafetyViolationError
 

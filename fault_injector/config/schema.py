@@ -69,7 +69,7 @@ class SafetyConfig(BaseModel):
 
 
 class GlobalConfig(BaseModel):
-    session_dir: str = "./fault-reports/sessions/"
+    session_dir: str = "./fault_injector/fault_reports/sessions/"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
 
@@ -77,7 +77,7 @@ class GlobalConfig(BaseModel):
 class OrchestratorConfig(BaseModel):
     max_parallel_agents: int = 1
     observe_interval: int = 15
-    session_dir: str = "./fault-reports/sessions/"
+    session_dir: str = "./fault_injector/fault_reports/sessions/"
 
 
 class MonitorConfig(BaseModel):
